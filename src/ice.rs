@@ -27,6 +27,10 @@ pub use crate::ffi::BoolResult;
 pub use crate::ffi::NiceCompatibility;
 pub use crate::ffi::NiceComponentState as ComponentState;
 pub use webrtc_sdp::attribute_type::SdpAttributeCandidate as Candidate;
+use std::sync::mpsc::Sender;
+use webrtc_sdp::attribute_type::SdpAttributeCandidate;
+use futures::channel::mpsc::UnboundedSender;
+use crate::ffi::NiceComponentState;
 
 type ComponentId = (c_uint, c_uint);
 
@@ -39,56 +43,45 @@ type ComponentId = (c_uint, c_uint);
 pub struct Agent {
     ctx: MainContext,
     agent: ffi::NiceAgent,
-    main_loop: MainLoop,
     msgs_sender: mpsc::UnboundedSender<ControlMsg>,
     msgs: mpsc::UnboundedReceiver<ControlMsg>,
+
     candidate_sinks: Arc<Mutex<HashMap<c_uint, mpsc::UnboundedSender<Candidate>>>>,
     state_sinks: Arc<Mutex<HashMap<ComponentId, mpsc::Sender<ComponentState>>>>,
 }
 
 impl Agent {
     /// Creates a new ICE agent in RFC5245 (ICE) compatibility mode.
-    pub fn new_rfc5245() -> Self {
-        Self::new(NiceCompatibility::RFC5245)
+    pub fn new_rfc5245(context: MainContext) -> Self {
+        Self::new(context, NiceCompatibility::RFC5245)
     }
 
     /// Creates a new ICE agent with the specified compatibility mode.
-    pub fn new(compat: NiceCompatibility) -> Self {
-        // Initialize FFI structs
-        let ctx = MainContext::new();
-        let main_loop = MainLoop::new(Some(&ctx), false);
+    pub fn new(ctx: MainContext, compat: NiceCompatibility) -> Self {
         let mut agent = ffi::NiceAgent::new(&ctx, compat);
-
-        // Start main loop on new thread
-        let main_loop_clone = main_loop.clone();
-        std::thread::spawn(move || {
-            // FIXME acquire
-            main_loop_clone.run();
-        });
 
         // Channel for sending messages from streams to the agent
         let (msgs_sender, msgs) = mpsc::unbounded();
 
         // Channel for sending candidates to streams
-        let candidate_sinks: Arc<Mutex<HashMap<c_uint, mpsc::UnboundedSender<Candidate>>>> =
-            Default::default();
+        let candidate_sinks: Arc<Mutex<HashMap<c_uint, mpsc::UnboundedSender<Candidate>>>> = Default::default();
         let candidate_sinks_clone = Arc::clone(&candidate_sinks);
         agent
             .on_new_candidate(move |candidate| {
                 let mut candidate_sinks = candidate_sinks_clone.lock().unwrap();
                 let stream_id = &candidate.stream_id();
-                if let Some(sink) = candidate_sinks.get_mut(stream_id) {
-                    if sink.unbounded_send(candidate.to_sdp()).is_err() {
-                        candidate_sinks.remove(stream_id);
-                    }
+                let sink = candidate_sinks.get_mut(stream_id).expect(format!("received candidate for stream {} but it does not exists", stream_id).as_str());
+                if sink.unbounded_send(candidate.to_sdp()).is_err() {
+                    candidate_sinks.remove(stream_id);
                 }
             })
             .unwrap();
         let candidate_sinks_clone = Arc::clone(&candidate_sinks);
         agent
             .on_candidate_gathering_done(move |stream_id| {
+                /* TODO: Send a candidate gathering done event */
                 let mut candidate_sinks = candidate_sinks_clone.lock().unwrap();
-                candidate_sinks.remove(&stream_id);
+                candidate_sinks.remove(&stream_id).expect(format!("received candidate gathering done signal for stream {} but it does not exists", stream_id).as_str());
             })
             .unwrap();
 
@@ -100,10 +93,9 @@ impl Agent {
             .on_component_state_changed(move |stream_id, component_id, new_state| {
                 let mut state_sinks = state_sinks_clone.lock().unwrap();
                 let key = (stream_id, component_id);
-                if let Some(sink) = state_sinks.get_mut(&key) {
-                    if block_on(sink.send(new_state)).is_err() {
-                        state_sinks.remove(&key);
-                    }
+                let sink = state_sinks.get_mut(&key).expect(format!("received state change for stream {}.{} but it does not exists", stream_id, component_id).as_str());
+                if block_on(sink.send(new_state)).is_err() {
+                    state_sinks.remove(&key);
                 }
             })
             .unwrap();
@@ -111,11 +103,10 @@ impl Agent {
         Agent {
             ctx,
             agent,
-            main_loop,
             msgs_sender,
             msgs,
             candidate_sinks,
-            state_sinks,
+            state_sinks
         }
     }
 
@@ -169,13 +160,50 @@ impl Agent {
                 // transports, so we'll just assume it only fails for WOULD_BLOCK.
                 let _ = self.agent.send(stream_id, component_id, &buf);
             }
+            ControlMsg::DropStream(stream_id) => {
+                self.remove_stream_internal(stream_id);
+            }
         }
+    }
+
+    /// Removes a stream from the nice agent.
+    /// This steam must not be registered at this agent.
+    fn remove_stream_internal(&mut self, stream_id: u32) {
+        println!("Removing stream {}", stream_id);
+
+        /*
+         * Just get all known components.
+         * We drain them already since events could still be fired right now.
+         */
+        let components = self.state_sinks
+            .lock().unwrap()
+            .iter()
+            .map(|e| if (e.0).0 == stream_id { (e.0).1 } else { 0 })
+            .filter(|e| *e > 0)
+            .collect::<Vec<u32>>();
+
+        for component in components {
+            let _ = self.agent.detach_recv(stream_id, component, &self.ctx);
+        }
+
+        self.agent.remove_stream(stream_id);
+
+        let mut state_sinks = self.state_sinks.lock().unwrap();
+        state_sinks.drain_filter(|key, _| key.0 == stream_id).count();
+
+        self.candidate_sinks.lock().unwrap().remove(&stream_id);
     }
 }
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        self.main_loop.quit();
+        /* TODO: Drop all streams */
+        /* iterate 'till all messages have been processed */
+        for _ in 0..1024 {
+            if !self.ctx.iteration(false) {
+                break;
+            }
+        }
     }
 }
 
@@ -258,12 +286,22 @@ impl<'a> StreamBuilder<'a> {
 
     /// Build the [Stream].
     pub fn build(&mut self) -> BoolResult<Stream> {
+        let stream_id = self.agent.agent.add_stream(self.components as c_uint)?;
+
+        match self.configure_stream(stream_id) {
+            Ok(stream) => Ok(stream),
+            Err(error) => {
+                self.agent.remove_stream_internal(stream_id);
+                Err(error)
+            }
+        }
+    }
+
+    fn configure_stream(&mut self, stream_id: u32) -> BoolResult<Stream> {
         let agent = &mut self.agent;
-        let state_sinks = &mut agent.state_sinks;
         let ffi = &mut agent.agent;
 
-        let id = ffi.add_stream(self.components as c_uint)?;
-        let (local_ufrag, local_pwd) = ffi.get_local_credentials(id).expect("local credentials");
+        let (local_ufrag, local_pwd) = ffi.get_local_credentials(stream_id).expect("local credentials");
         let local_ufrag = local_ufrag
             .into_string()
             .expect("generated ufrag is valid utf8");
@@ -275,19 +313,16 @@ impl<'a> StreamBuilder<'a> {
         for i in 0..(self.components as c_uint) {
             let component_id = i + 1;
             let (mut source_sender, source) = mpsc::channel(self.inbound_buf_size);
-            let recv_handle = ffi.attach_recv(id, component_id, &agent.ctx, move |buf| {
+            let recv_handle = ffi.attach_recv(stream_id, component_id, &agent.ctx, move |buf| {
                 let _ = source_sender.try_send(buf.to_vec());
             })?;
 
             let (state_sender, state_stream) = mpsc::channel(8);
-            state_sinks
-                .lock()
-                .unwrap()
-                .insert((id, component_id), state_sender);
+            agent.state_sinks.lock().unwrap().insert((stream_id, component_id), state_sender);
 
             components.push(StreamComponent {
                 _recv_handle: recv_handle,
-                stream_id: id,
+                stream_id,
                 component_id,
                 state: ComponentState::Disconnected,
                 state_stream,
@@ -296,21 +331,19 @@ impl<'a> StreamBuilder<'a> {
             });
         }
 
-        let (candidate_sink, candidates) = mpsc::unbounded();
-        agent
-            .candidate_sinks
-            .lock()
-            .unwrap()
-            .insert(id, candidate_sink);
-
         for (index, (min_port, max_port)) in &self.port_ranges {
-            ffi.set_port_range(id, *index as c_uint + 1, *min_port, *max_port);
+            ffi.set_port_range(stream_id, *index as c_uint + 1, *min_port, *max_port);
         }
 
-        ffi.gather_candidates(id)?;
+        let (candidate_sink, candidates) = mpsc::unbounded();
+        agent.candidate_sinks.lock().unwrap().insert(stream_id, candidate_sink);
+
+        /* this call will already trigger some candidate found events */
+        ffi.gather_candidates(stream_id)?;
 
         Ok(Stream {
-            id,
+            id: stream_id,
+            component_count: self.components,
             local_ufrag,
             local_pwd,
             msg_sink: agent.msgs_sender.clone(),
@@ -324,14 +357,19 @@ enum ControlMsg {
     SetRemoteCredentials(c_uint, CString, CString),
     AddRemoteCandidate(ComponentId, Candidate),
     Send(ComponentId, Vec<u8>),
+    DropStream(c_uint)
 }
 
 /// An ICE stream consisting of multiple components.
 ///
 /// Implements [futures::Stream] which emits the local ICE candidates for this stream as they are
 /// being discovered.
+///
+/// Attention: This stream must be kept alive while using any of the components.
+///            If not done, the stream and the components will be unregistered
 pub struct Stream {
     id: c_uint,
+    component_count: usize,
     local_ufrag: String,
     local_pwd: String,
     msg_sink: mpsc::UnboundedSender<ControlMsg>,
@@ -363,6 +401,8 @@ impl Stream {
 
     /// Adds a new remote ICE candidate for this stream.
     pub fn add_remote_candidate(&mut self, candidate: Candidate) {
+        assert!(candidate.component > 0);
+        assert!((candidate.component as usize) <= self.component_count);
         let msg = ControlMsg::AddRemoteCandidate((self.id, candidate.component), candidate);
         let _ = self.msg_sink.unbounded_send(msg);
     }
@@ -382,6 +422,7 @@ impl Stream {
         std::mem::replace(&mut self.components, Vec::new())
     }
 
+    /*
     /// Returns the components of this stream, consuming the stream.
     ///
     /// Note that this should probably only be called after all ICE candidates have been exchanged.
@@ -389,6 +430,7 @@ impl Stream {
     pub fn into_components(self) -> Vec<StreamComponent> {
         self.components
     }
+    */
 }
 
 impl FuturesStream for Stream {
@@ -398,6 +440,12 @@ impl FuturesStream for Stream {
         let f = &mut self.candidates;
         pin_mut!(f);
         f.poll_next(cx)
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        let _ = self.msg_sink.unbounded_send(ControlMsg::DropStream(self.id));
     }
 }
 
@@ -575,23 +623,48 @@ mod test {
     use super::*;
     use futures::StreamExt;
     use tokio::runtime;
+    use glib_sys::gboolean;
+    use crate::glib::translate::{ FromGlibPtrBorrow, FromGlibPtrNone, FromGlibPtrFull };
+    use glib::translate::ToGlibPtr;
+    use std::ffi::CStr;
 
     #[test]
     fn connects_and_transmits_data() {
+        unsafe {
+            let mut wsa_data: winapi::um::winsock2::WSADATA = std::mem::MaybeUninit::uninit().assume_init();
+            let result = winapi::um::winsock2::WSAStartup(0x202, &mut wsa_data);
+            if result != 0 {
+                panic!("WSAStartup failed with code {:?}", result);
+            }
+
+            println!("WSAInfo::szDescription = {:?}", CStr::from_ptr(&mut wsa_data.szDescription[0]));
+            println!("WSAInfo::szSystemStatus = {:?}", CStr::from_ptr(&mut wsa_data.szSystemStatus[0]));
+            println!("WSAInfo::lpVendorInfo = {:?}", wsa_data.lpVendorInfo);
+            libnice_sys::nice_debug_disable(1);
+        }
+
         let mut executor = runtime::Builder::new().basic_scheduler().build().unwrap();
 
+        let ctx = MainContext::new();
+        let main_loop = MainLoop::new(Some(&ctx), false);
+
+        // Start main loop on new thread
+        let main_loop_clone = main_loop.clone();
+        std::thread::spawn(move || {
+            if !main_loop_clone.get_context().acquire() {
+                panic!("failed to acquire main loop");
+            }
+            main_loop_clone.run();
+        });
+
         // Create ICE agents
-        let mut server = Agent::new_rfc5245();
-        let mut client = Agent::new_rfc5245();
+        let mut server = Agent::new_rfc5245(main_loop.get_context());
+        let mut client = Agent::new_rfc5245(main_loop.get_context());
         client.set_controlling_mode(true);
 
         // Create one ICE stream per agent, each with one component
-        let mut server_stream = server.stream_builder(1).build().unwrap();
-        let mut client_stream = client.stream_builder(1).build().unwrap();
-
-        // Grab components for later use (you could also ship them off to different tasks here)
-        let mut server_component = server_stream.take_components().pop().unwrap();
-        let mut client_component = client_stream.take_components().pop().unwrap();
+        let mut server_stream = server.stream_builder(2).build().unwrap();
+        let mut client_stream = client.stream_builder(2).build().unwrap();
 
         // Exchange ICE credentials
         server_stream.set_remote_credentials(
@@ -621,28 +694,34 @@ mod test {
             server_stream.add_remote_candidate(candidate);
         }
 
-        // Wait until the component state reaches Connected, otherwise data will just be dropped
-        server_component = executor
-            .block_on(server_component.wait_for_state(ComponentState::Connected))
-            .unwrap();
-        client_component = executor
-            .block_on(client_component.wait_for_state(ComponentState::Connected))
-            .unwrap();
+        // Grab components for later use (you could also ship them off to different tasks here)
+        let mut server_components = server_stream.take_components();
+        let mut client_components = client_stream.take_components();
 
-        // Send some data (potentially unreliable, hence unbounded)
-        server_component.unbounded_send(vec![1, 2, 3, 4]);
-        client_component.unbounded_send(vec![42]);
+        while !server_components.is_empty() {
+            // Wait until the component state reaches Connected, otherwise data will just be dropped
+            let mut server_component = executor
+                .block_on(server_components.pop().unwrap().wait_for_state(ComponentState::Connected))
+                .unwrap();
+            let mut client_component = executor
+                .block_on(client_components.pop().unwrap().wait_for_state(ComponentState::Connected))
+                .unwrap();
 
-        // Check that we received it
-        // Note that we can be fairly sure here (local-to-local) but under normal circumstances
-        // the transport must be assumed to be unreliable!
-        assert_eq!(
-            Some(vec![42]),
-            executor.block_on(server_component.by_ref().into_future()).0
-        );
-        assert_eq!(
-            Some(vec![1, 2, 3, 4]),
-            executor.block_on(client_component.by_ref().into_future()).0
-        );
+            // Send some data (potentially unreliable, hence unbounded)
+            server_component.unbounded_send(vec![1, 2, 3, 4, server_component.component_id as u8]);
+            client_component.unbounded_send(vec![42, client_component.component_id as u8]);
+
+            // Check that we received it
+            // Note that we can be fairly sure here (local-to-local) but under normal circumstances
+            // the transport must be assumed to be unreliable!
+            assert_eq!(
+                Some(vec![42, client_component.component_id as u8]),
+                executor.block_on(server_component.by_ref().into_future()).0
+            );
+            assert_eq!(
+                Some(vec![1, 2, 3, 4, server_component.component_id as u8]),
+                executor.block_on(client_component.by_ref().into_future()).0
+            );
+        }
     }
 }

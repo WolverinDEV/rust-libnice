@@ -1,5 +1,6 @@
 #![allow(clippy::ptr_offset_with_cast)] // glib_wrapper emits these
 #![allow(missing_docs)] // glib_wrapper currently makes it impossible to put docs (or attribs!) on the class struct
+
 use glib::glib_wrapper;
 use glib::BoolError;
 use glib::MainContext;
@@ -9,6 +10,7 @@ use std::borrow::Borrow;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::io;
+use std::result::Result;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
@@ -26,6 +28,7 @@ use glib::translate::*;
 use std::ptr;
 
 use libnice_sys as sys;
+use crate::platform as platform;
 
 glib_wrapper! {
     /// See the [libnice] documentation.
@@ -55,7 +58,7 @@ impl NiceAgent {
 
     /// Creates a new NiceAgent with the specified compatibility mode.
     pub fn new(ctx: &MainContext, compat: NiceCompatibility) -> NiceAgent {
-        let ptr = unsafe { sys::nice_agent_new(ctx.to_glib_none().0, compat as u32) };
+        let ptr = unsafe { sys::nice_agent_new(ctx.to_glib_none().0, compat as i32) };
         if ptr.is_null() {
             panic!("nice_agent_new failed");
         }
@@ -92,7 +95,7 @@ impl NiceAgent {
         self.connect("component-state-changed", false, move |values| {
             let stream_id = values[1].get().unwrap().unwrap();
             let component_id = values[2].get().unwrap().unwrap();
-            let state: c_uint = values[3].get().unwrap().unwrap();
+            let state: u32 = values[3].get().unwrap().unwrap();
             f(stream_id, component_id, state.into());
             None
         })
@@ -124,6 +127,14 @@ impl NiceAgent {
             return Err(glib_bool_error!("add_stream failed"));
         }
         Ok(id)
+    }
+
+    /// Removes a stream from this agent
+    /// [libnice] documentation.
+    ///
+    /// [libnice]: https://nice.freedesktop.org/libnice/NiceAgent.html#nice-agent-remove-stream
+    pub fn remove_stream(&self, stream_id: c_uint) {
+        unsafe { sys::nice_agent_remove_stream(self.to_glib_none().0, stream_id) };
     }
 
     /// Starts candidate gathering for a stream.
@@ -388,7 +399,7 @@ glib_wrapper! {
 impl NiceCandidate {
     /// Creates a new NiceCandidate.
     pub fn new(type_: NiceCandidateType) -> Self {
-        unsafe { Self::from_glib_full(sys::nice_candidate_new(type_ as u32)) }
+        unsafe { Self::from_glib_full(sys::nice_candidate_new(type_ as i32)) }
     }
 
     /// Creates a new NiceCandidate from an [SdpAttributeCandidate].
@@ -457,7 +468,7 @@ impl NiceCandidate {
     /// Sets the `transport` field.
     pub fn set_transport(&mut self, transport: NiceCandidateTransport) {
         let raw = unsafe { &mut *self.to_glib_none_mut().0 };
-        raw.transport = transport as u32;
+        raw.transport = transport as i32;
     }
 
     /// Returns the `addr` field.
@@ -668,6 +679,12 @@ impl From<sys::NiceComponentState> for NiceComponentState {
     }
 }
 
+impl From<u32> for NiceComponentState {
+    fn from(raw: u32) -> Self {
+        NiceComponentState::from(raw as sys::NiceComponentState)
+    }
+}
+
 /// See the [libnice] documentation.
 ///
 /// [libnice]: https://nice.freedesktop.org/libnice/NiceAgent.html#NiceCompatibility
@@ -686,12 +703,12 @@ pub enum NiceCompatibility {
 fn from_nice_addr(raw: &sys::NiceAddress) -> SocketAddr {
     unsafe {
         match i32::from(raw.s.addr.as_ref().sa_family) {
-            libc::AF_INET => (
+            platform::AF_INET => (
                 Ipv4Addr::from(u32::from_be(raw.s.ip4.as_ref().sin_addr.s_addr)),
                 u16::from_be(raw.s.ip4.as_ref().sin_port),
             )
                 .into(),
-            libc::AF_INET6 => (
+            platform::AF_INET6 => (
                 Ipv6Addr::from(raw.s.ip6.as_ref().sin6_addr.s6_addr),
                 u16::from_be(raw.s.ip6.as_ref().sin6_port),
             )
@@ -705,13 +722,13 @@ fn to_nice_addr(addr: &SocketAddr, raw: &mut sys::NiceAddress) {
     match addr {
         SocketAddr::V4(addr) => {
             let raw_addr = unsafe { raw.s.ip4.as_mut() };
-            raw_addr.sin_family = libc::AF_INET as u16;
+            raw_addr.sin_family = platform::AF_INET as u16;
             raw_addr.sin_port = addr.port().to_be();
             raw_addr.sin_addr.s_addr = u32::from(*addr.ip()).to_be();
         }
         SocketAddr::V6(addr) => {
             let raw_addr = unsafe { raw.s.ip6.as_mut() };
-            raw_addr.sin6_family = libc::AF_INET6 as u16;
+            raw_addr.sin6_family = platform::AF_INET6 as u16;
             raw_addr.sin6_port = addr.port().to_be();
             raw_addr.sin6_addr.s6_addr = addr.ip().octets();
         }

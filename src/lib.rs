@@ -1,3 +1,4 @@
+#![feature(hash_drain_filter)]
 #![deny(missing_docs)]
 //! Safe high- and low-level bindings to [libnice].
 //!
@@ -20,5 +21,11 @@ pub mod ffi;
 /// High-level, futures-based ICE agent.
 pub mod ice;
 
+mod platform;
+
 #[cfg(test)]
 mod test {}
+
+fn test() {
+    let agent: ice::Agent;
+}
