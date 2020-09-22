@@ -173,18 +173,20 @@ impl Agent {
         let components = self.state_sinks
             .lock().unwrap()
             .iter()
-            .map(|e| if (e.0).0 == stream_id { (e.0).1 } else { 0 })
-            .filter(|e| *e > 0)
-            .collect::<Vec<u32>>();
+            .map(|e| *e.0)
+            .filter(|e| e.0 == stream_id)
+            .collect::<Vec<ComponentId>>();
 
-        for component in components {
-            let _ = self.agent.detach_recv(stream_id, component, &self.ctx);
+        for component in components.iter() {
+            let _ = self.agent.detach_recv(stream_id, component.0, &self.ctx);
         }
 
         self.agent.remove_stream(stream_id);
 
         let mut state_sinks = self.state_sinks.lock().unwrap();
-        state_sinks.drain_filter(|key, _| key.0 == stream_id).count();
+        for key in components {
+            state_sinks.remove(&key);
+        }
 
         self.candidate_sinks.lock().unwrap().remove(&stream_id);
     }
@@ -606,11 +608,13 @@ mod test {
     use super::*;
     use futures::StreamExt;
     use tokio::runtime;
-    use std::ffi::CStr;
     use glib::MainLoop;
+    use glib::translate::ToGlibPtr;
+    use std::ffi::CStr;
 
     #[test]
     fn connects_and_transmits_data() {
+        #[cfg(target_os = "windows")]
         unsafe {
             let mut wsa_data: winapi::um::winsock2::WSADATA = std::mem::MaybeUninit::uninit().assume_init();
             let result = winapi::um::winsock2::WSAStartup(0x202, &mut wsa_data);
@@ -621,7 +625,6 @@ mod test {
             println!("WSAInfo::szDescription = {:?}", CStr::from_ptr(&mut wsa_data.szDescription[0]));
             println!("WSAInfo::szSystemStatus = {:?}", CStr::from_ptr(&mut wsa_data.szSystemStatus[0]));
             println!("WSAInfo::lpVendorInfo = {:?}", wsa_data.lpVendorInfo);
-            libnice_sys::nice_debug_disable(1);
         }
 
         let mut executor = runtime::Builder::new().basic_scheduler().build().unwrap();
@@ -638,14 +641,24 @@ mod test {
             main_loop_clone.run();
         });
 
+        println!("Creating server/client");
         // Create ICE agents
         let mut server = Agent::new_rfc5245(main_loop.get_context());
         let mut client = Agent::new_rfc5245(main_loop.get_context());
         client.set_controlling_mode(true);
 
+        unsafe {
+            let mut address: libnice_sys::NiceAddress = std::mem::MaybeUninit::uninit().assume_init();
+            libnice_sys::nice_address_set_ipv4(&mut address, 0x7F000001);
+            libnice_sys::nice_agent_add_local_address(server.agent.to_glib_none().0, &mut address);
+            libnice_sys::nice_agent_add_local_address(client.agent.to_glib_none().0, &mut address);
+        }
+
+        println!("Starting server/client");
         // Create one ICE stream per agent, each with one component
         let mut server_stream = server.stream_builder(2).build().unwrap();
         let mut client_stream = client.stream_builder(2).build().unwrap();
+        println!("Started server/client");
 
         // Exchange ICE credentials
         server_stream.set_remote_credentials(

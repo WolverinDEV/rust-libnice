@@ -192,8 +192,8 @@ impl NiceAgent {
         let ufrag = unsafe { CStr::from_ptr(ufrag_ptr) }.to_owned();
         let pwd = unsafe { CStr::from_ptr(pwd_ptr) }.to_owned();
         unsafe {
-            glib_sys::g_free(ufrag_ptr as glib_sys::gpointer);
-            glib_sys::g_free(pwd_ptr as glib_sys::gpointer);
+            glib::glib_sys::g_free(ufrag_ptr as glib::glib_sys::gpointer);
+            glib::glib_sys::g_free(pwd_ptr as glib::glib_sys::gpointer);
         }
         Ok((ufrag, pwd))
     }
@@ -210,9 +210,9 @@ impl NiceAgent {
     ) -> BoolResult<usize> {
         // FIXME what does this function actually do? the docs talk about add but its name says set
         let res = unsafe {
-            let mut list = ptr::null_mut::<glib_sys::GSList>();
+            let mut list = ptr::null_mut::<glib::glib_sys::GSList>();
             for candidate in candidates.iter().rev() {
-                list = glib_sys::g_slist_prepend(list, Ptr::to(candidate.to_glib_none().0));
+                list = glib::glib_sys::g_slist_prepend(list, Ptr::to(candidate.to_glib_none().0));
             }
             let res = sys::nice_agent_set_remote_candidates(
                 self.to_glib_none().0,
@@ -225,7 +225,7 @@ impl NiceAgent {
                 */
                 list,
             );
-            glib_sys::g_slist_free(list);
+            glib::glib_sys::g_slist_free(list);
             res
         };
         if res < 0 {
@@ -300,7 +300,7 @@ impl NiceAgent {
             _component_id: c_uint,
             len: c_uint,
             buf: *mut c_char,
-            user_data: glib_sys::gpointer,
+            user_data: glib::glib_sys::gpointer,
         ) {
             let f_ptr = user_data as *mut F;
             let f = unsafe { &mut *f_ptr };
@@ -315,7 +315,7 @@ impl NiceAgent {
                 component_id,
                 ctx.to_glib_none().0,
                 Some(wrapper::<F>),
-                boxed_f.deref_mut() as *mut F as glib_sys::gpointer,
+                boxed_f.deref_mut() as *mut F as glib::glib_sys::gpointer,
             )
         };
         if res < 0 {
