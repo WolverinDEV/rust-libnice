@@ -25,7 +25,3 @@ mod platform;
 
 #[cfg(test)]
 mod test {}
-
-fn test() {
-    let agent: ice::Agent;
-}

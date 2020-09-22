@@ -10,7 +10,6 @@ use futures::task::Poll;
 use futures::Sink;
 use futures::Stream as FuturesStream;
 use glib::MainContext;
-use glib::MainLoop;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::future::Future;
@@ -27,10 +26,6 @@ pub use crate::ffi::BoolResult;
 pub use crate::ffi::NiceCompatibility;
 pub use crate::ffi::NiceComponentState as ComponentState;
 pub use webrtc_sdp::attribute_type::SdpAttributeCandidate as Candidate;
-use std::sync::mpsc::Sender;
-use webrtc_sdp::attribute_type::SdpAttributeCandidate;
-use futures::channel::mpsc::UnboundedSender;
-use crate::ffi::NiceComponentState;
 
 type ComponentId = (c_uint, c_uint);
 
@@ -192,18 +187,6 @@ impl Agent {
         state_sinks.drain_filter(|key, _| key.0 == stream_id).count();
 
         self.candidate_sinks.lock().unwrap().remove(&stream_id);
-    }
-}
-
-impl Drop for Agent {
-    fn drop(&mut self) {
-        /* TODO: Drop all streams */
-        /* iterate 'till all messages have been processed */
-        for _ in 0..1024 {
-            if !self.ctx.iteration(false) {
-                break;
-            }
-        }
     }
 }
 
@@ -623,10 +606,8 @@ mod test {
     use super::*;
     use futures::StreamExt;
     use tokio::runtime;
-    use glib_sys::gboolean;
-    use crate::glib::translate::{ FromGlibPtrBorrow, FromGlibPtrNone, FromGlibPtrFull };
-    use glib::translate::ToGlibPtr;
     use std::ffi::CStr;
+    use glib::MainLoop;
 
     #[test]
     fn connects_and_transmits_data() {
