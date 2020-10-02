@@ -230,15 +230,6 @@ impl NiceAgent {
         unsafe { sys::nice_agent_set_software(self.to_glib_none().0, name.borrow().as_ptr()) }
     }
 
-    /// Changes whether this agent is in controlling mode (by default it is not).
-    /// [libnice] documentation.
-    ///
-    /// [libnice]: https://nice.freedesktop.org/libnice/NiceAgent.html#NiceAgent--controlling-mode
-    pub fn set_controlling_mode(&mut self, controlling: bool) {
-        self.set_property("controlling-mode", &controlling)
-            .expect("failed to set controlling-mode property");
-    }
-
     /// Adds a new stream to this agent and returns its id.
     /// [libnice] documentation.
     ///

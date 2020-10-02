@@ -26,7 +26,7 @@ pub use crate::ffi::BoolResult;
 pub use crate::ffi::NiceCompatibility;
 pub use crate::ffi::NiceComponentState as ComponentState;
 pub use webrtc_sdp::attribute_type::SdpAttributeCandidate as Candidate;
-use crate::ffi::NiceComponentState;
+use crate::ffi::{NiceComponentState, NiceAgentProperty};
 use libnice_sys::NiceAgentOption;
 
 type ComponentId = (c_uint, c_uint);
@@ -136,7 +136,8 @@ impl Agent {
 
     /// Changes whether this agent is in controlling mode (by default it is not).
     pub fn set_controlling_mode(&mut self, controlling: bool) {
-        self.agent.set_controlling_mode(controlling);
+        self.agent.set_nice_property(NiceAgentProperty::ControllingMode(controlling))
+            .expect("failed to toggle controlling mode");
     }
 
     /// Add a new [Stream] with the specified amount of components to the agent.
