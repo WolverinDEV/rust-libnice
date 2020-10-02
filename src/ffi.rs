@@ -1,7 +1,7 @@
 #![allow(clippy::ptr_offset_with_cast)] // glib_wrapper emits these
 #![allow(missing_docs)] // glib_wrapper currently makes it impossible to put docs (or attribs!) on the class struct
 
-use glib::glib_wrapper;
+use glib::{glib_wrapper};
 use glib::BoolError;
 use glib::MainContext;
 use glib::ObjectExt;
@@ -29,6 +29,120 @@ use std::ptr;
 
 use libnice_sys as sys;
 use crate::platform as platform;
+use libnice_sys::{NiceAgentOption, NiceNominationMode};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NiceAgentProperty {
+    /// Read
+    ByteStreamTcp(bool),
+    /// Read / Construct
+    Compatibility(u32),
+    /// Read / write
+    ControllingMode(bool),
+    /// Read / write
+    ForceRelay(bool),
+    /// Read / Construct
+    FullMode(bool),
+    /// Read / write
+    IceTcp(bool),
+    /// Read / write
+    IceTrickle(bool),
+    /// Read / write
+    IceUdp(bool),
+    /// Read / Construct
+    IdleTimeout(u32),
+    /// Read / write
+    KeepAliveConnCheck(bool),
+    /// Read / Construct
+    /* MainContext(MainContext), */
+    /// Read / write
+    MaxConnectivityChecks(u32),
+    /// Read / Construct
+    NominationMode(NiceNominationMode),
+    /// Read / write
+    ProxyIp(Option<String>),
+    /// Read / write
+    ProxyPassword(Option<String>),
+    /// Read / write
+    ProxyPort(u32),
+    /// Read / write
+    ProxyType(u32),
+    /// Read / write
+    ProxyUsername(Option<String>),
+    /// Read / Construct
+    Reliable(bool),
+    /// Read / Construct
+    StunInitialTimeout(u32),
+    /// Read / Construct
+    StunMaxRetransmissions(u32),
+    /// Read / Construct
+    StunPacingTimer(u32),
+    /// Read / Construct
+    StunReliableTimeout(u32),
+    /// Read / write
+    StunServer(Option<String>),
+    /// Read / write
+    StunPort(u32),
+    /// Read / write
+    SupportRenomination(bool),
+    /// Read / Construct
+    Upnp(bool),
+    /// Read / Construct
+    UpnpTimeout(u32)
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum NiceAgentPropertyType {
+    ByteStreamTcp,
+    Compatibility,
+    ControllingMode,
+    ForceRelay,
+    FullMode,
+    IceTcp,
+    IceTrickle,
+    IceUdp,
+    IdleTimeout,
+    KeepAliveConnCheck,
+    /* MainContext, */
+    MaxConnectivityChecks,
+    NominationMode,
+    ProxyIp,
+    ProxyPassword,
+    ProxyPort,
+    ProxyType,
+    ProxyUsername,
+    Reliable,
+    StunInitialTimeout,
+    StunMaxRetransmissions,
+    StunPacingTimer,
+    StunReliableTimeout,
+    StunServer,
+    StunPort,
+    SupportRenomination,
+    Upnp,
+    UpnpTimeout
+}
+
+macro_rules! nice_read_properties {
+    ($self:ident, $value:ident, $(($property:ident, $name:expr) $($missing_value:expr)?),*)=> {{
+        match $value {
+            $(
+                NiceAgentPropertyType::$property => Ok(NiceAgentProperty::$property($self.get_property($name)?.get().unwrap()$(.expect($missing_value))?)),
+            )*
+        }
+    }}
+}
+
+macro_rules! nice_write_properties {
+    ($self:ident, $value:ident, $(($property:ident, $name:expr)),*) => {{
+        match $value {
+            $(
+                NiceAgentProperty::$property (value) => $self.set_property($name, &value),
+            )*
+            _ => Err(glib_bool_error!("Unknown property"))
+        }
+    }}
+}
 
 glib_wrapper! {
     /// See the [libnice] documentation.
@@ -59,6 +173,14 @@ impl NiceAgent {
     /// Creates a new NiceAgent with the specified compatibility mode.
     pub fn new(ctx: &MainContext, compat: NiceCompatibility) -> NiceAgent {
         let ptr = unsafe { sys::nice_agent_new(ctx.to_glib_none().0, compat as i32) };
+        if ptr.is_null() {
+            panic!("nice_agent_new failed");
+        }
+        unsafe { NiceAgent::from_glib_full(ptr) }
+    }
+
+    pub fn new_full(ctx: &MainContext, compat: NiceCompatibility, flags: NiceAgentOption) -> NiceAgent {
+        let ptr = unsafe { sys::nice_agent_new_full(ctx.to_glib_none().0, compat as i32, flags as i32) };
         if ptr.is_null() {
             panic!("nice_agent_new failed");
         }
@@ -357,6 +479,67 @@ impl NiceAgent {
             return Err(glib_bool_error!("attach_recv failed"));
         }
         Ok(())
+    }
+
+    /// Read a nice agent property from the google object.
+    /// If the property isn't readable `None` will be returned
+    pub fn get_nice_property(&self, property: NiceAgentPropertyType) -> BoolResult<NiceAgentProperty> {
+        nice_read_properties!(self, property,
+            (ByteStreamTcp, "bytestream-tcp") "missing value",
+            (Compatibility, "compatibility") "missing value",
+            (ControllingMode, "controlling-mode") "missing value",
+            (ForceRelay, "force-relay") "missing value",
+            (FullMode, "full-mode") "missing value",
+            (IceTcp, "ice-tcp") "missing value",
+            (IceTrickle, "ice-trickle") "missing value",
+            (IceUdp, "ice-udp") "missing value",
+            (IdleTimeout, "idle-timeout") "missing value",
+            (KeepAliveConnCheck, "keepalive-conncheck") "missing value",
+            /* MainContext, */
+            (MaxConnectivityChecks, "max-connectivity-checks") "missing value",
+            (NominationMode, "nomination-mode") "missing value",
+            (ProxyIp, "proxy-ip"),
+            (ProxyPassword, "proxy-password"),
+            (ProxyPort, "proxy-port") "missing value",
+            (ProxyType, "proxy-type") "missing value",
+            (ProxyUsername, "proxy-username"),
+            (Reliable, "reliable") "missing value",
+            (StunInitialTimeout, "stun-initial-timeout") "missing value",
+            (StunMaxRetransmissions, "stun-max-retransmissions") "missing value",
+            (StunPacingTimer, "stun-pacing-timer") "missing value",
+            (StunReliableTimeout, "stun-reliable-timeout") "missing value",
+            (StunServer, "stun-server"),
+            (StunPort, "stun-port") "missing value",
+            (SupportRenomination, "support-renomination") "missing value",
+            (Upnp, "upnp") "missing value",
+            (UpnpTimeout, "upnp-timeout") "missing value"
+        )
+    }
+
+    pub fn set_nice_property(&mut self, property: NiceAgentProperty) -> BoolResult<()> {
+        nice_write_properties!(self, property,
+            (ControllingMode, "controlling-mode"),
+            (ForceRelay, "force-relay"),
+            (IceTcp, "ice-tcp"),
+            (IceTrickle, "ice-trickle"),
+            (IceUdp, "ice-udp"),
+            (KeepAliveConnCheck, "keepalive-conncheck"),
+            (MaxConnectivityChecks, "max-connectivity-checks"),
+            (ProxyIp, "proxy-ip"),
+            (ProxyPassword, "proxy-password"),
+            (ProxyPort, "proxy-port"),
+            (ProxyType, "proxy-type"),
+            (ProxyUsername, "proxy-username"),
+            (StunInitialTimeout, "stun-initial-timeout"),
+            (StunMaxRetransmissions, "stun-max-retransmissions"),
+            (StunPacingTimer, "stun-pacing-timer"),
+            (StunReliableTimeout, "stun-reliable-timeout"),
+            (StunServer, "stun-server"),
+            (StunPort, "stun-port"),
+            (SupportRenomination, "support-renomination"),
+            (Upnp, "upnp"),
+            (UpnpTimeout, "upnp-timeout")
+        )
     }
 }
 
@@ -732,5 +915,23 @@ fn to_nice_addr(addr: &SocketAddr, raw: &mut sys::NiceAddress) {
             raw_addr.sin6_port = addr.port().to_be();
             raw_addr.sin6_addr.s6_addr = addr.ip().octets();
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::ffi::{NiceAgent, NiceCompatibility, NiceAgentProperty, NiceAgentPropertyType};
+    use glib::MainContext;
+
+    #[test]
+    fn test_property_assign() {
+        let ctx = MainContext::new();
+        let mut agent = NiceAgent::new(&ctx, NiceCompatibility::RFC5245);
+
+        assert_eq!(agent.get_nice_property(NiceAgentPropertyType::ProxyUsername).unwrap(), NiceAgentProperty::ProxyUsername(None));
+        //println!("Username: {:?}", agent.get_nice_property(NiceAgentPropertyType::ProxyUsername).unwrap());
+        agent.set_nice_property(NiceAgentProperty::ProxyUsername(Some(String::from("WolverinDEV")))).unwrap();
+        assert_eq!(agent.get_nice_property(NiceAgentPropertyType::ProxyUsername).unwrap(), NiceAgentProperty::ProxyUsername(Some(String::from("WolverinDEV"))));
+        //println!("Username: {:?}", agent.get_nice_property(NiceAgentPropertyType::ProxyUsername).unwrap());
     }
 }

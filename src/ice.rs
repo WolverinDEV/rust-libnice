@@ -26,6 +26,8 @@ pub use crate::ffi::BoolResult;
 pub use crate::ffi::NiceCompatibility;
 pub use crate::ffi::NiceComponentState as ComponentState;
 pub use webrtc_sdp::attribute_type::SdpAttributeCandidate as Candidate;
+use crate::ffi::NiceComponentState;
+use libnice_sys::NiceAgentOption;
 
 type ComponentId = (c_uint, c_uint);
 
@@ -53,8 +55,17 @@ impl Agent {
 
     /// Creates a new ICE agent with the specified compatibility mode.
     pub fn new(ctx: MainContext, compat: NiceCompatibility) -> Self {
-        let mut agent = ffi::NiceAgent::new(&ctx, compat);
+        let agent = ffi::NiceAgent::new(&ctx, compat);
+        Self::construct(ctx, agent)
+    }
 
+    /// Creates a new ICE agent with the specified compatibility mode and agent options
+    pub fn new_full(ctx: MainContext, compat: NiceCompatibility, flags: NiceAgentOption) -> Self {
+        let agent = ffi::NiceAgent::new_full(&ctx, compat, flags);
+        Self::construct(ctx, agent)
+    }
+
+    fn construct(ctx: MainContext, mut agent: ffi::NiceAgent) -> Self {
         // Channel for sending messages from streams to the agent
         let (msgs_sender, msgs) = mpsc::unbounded();
 
@@ -192,6 +203,14 @@ impl Agent {
     }
 }
 
+/*
+ * The nice wrapper itself is safe to use across threads
+ */
+unsafe impl Sync for Agent {}
+
+/* TODO: Is this really true? */
+unsafe impl Send for Agent {}
+
 impl Future for Agent {
     type Output = (); // never
 
@@ -203,6 +222,15 @@ impl Future for Agent {
                 ready!(msgs.poll_next(cx)).expect("msgs stream ended prematurely")
             };
             self.handle_msg(msg);
+        }
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        for (_, sink) in self.state_sinks.lock().expect("failed to lock stream state sinks").iter_mut() {
+            let _ = sink.send(NiceComponentState::Disconnected);
+            sink.close_channel()
         }
     }
 }
@@ -483,7 +511,7 @@ impl StreamComponent {
 
     /// Updates the current state by polling [state_stream].
     /// Returns `Poll::Ready(())` when [state_stream] has been closed.
-    fn poll_state(&mut self, cx: &mut Context) -> Poll<()> {
+    pub fn poll_state(&mut self, cx: &mut Context) -> Poll<()> {
         loop {
             let state_stream = &mut self.state_stream;
             pin_mut!(state_stream);
@@ -615,7 +643,7 @@ mod test {
     #[test]
     fn connects_and_transmits_data() {
         #[cfg(target_os = "windows")]
-        unsafe {
+            unsafe {
             let mut wsa_data: winapi::um::winsock2::WSADATA = std::mem::MaybeUninit::uninit().assume_init();
             let result = winapi::um::winsock2::WSAStartup(0x202, &mut wsa_data);
             if result != 0 {
