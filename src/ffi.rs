@@ -198,6 +198,20 @@ impl NiceAgent {
         })
     }
 
+    /// Attaches a callback function to the `new-selected-pair-full` signal.
+    pub fn on_selected_pair<F: Fn(c_uint, c_uint, &NiceCandidate, &NiceCandidate) + Send + Sync + 'static>(
+        &mut self,
+        f: F,
+    ) -> BoolResult<SignalHandlerId> {
+        self.connect("new-selected-pair-full", false, move |values| {
+            f(values[1].get().unwrap().unwrap(),
+              values[2].get().unwrap().unwrap(),
+              &values[3].get().unwrap().unwrap(),
+              &values[4].get().unwrap().unwrap());
+            None
+        })
+    }
+
     /// Attaches a callback function to the `candidate-gathering-done` signal.
     pub fn on_candidate_gathering_done<F: Fn(c_uint) + Send + Sync + 'static>(
         &mut self,

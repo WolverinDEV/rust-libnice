@@ -2,7 +2,7 @@
 use crate::ffi;
 use futures::channel::mpsc;
 use futures::executor::block_on;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{AsyncRead, AsyncWrite, ErrorKind};
 use futures::pin_mut;
 use futures::ready;
 use futures::sink::SinkExt;
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::future::Future;
 use std::io;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ops::DerefMut;
 use std::os::raw::c_uint;
 use std::pin::Pin;
@@ -475,6 +475,7 @@ pub struct StreamComponent {
     sink: mpsc::UnboundedSender<ControlMsg>,
 }
 
+/* TODO: Implement a split method maybe which splits up this stream into a reader, a writer and a state future? */
 impl StreamComponent {
     /// Adds a remote ICE candidate to this stream component.
     pub fn add_remote_candidate(&mut self, candidate: Candidate) {
@@ -524,6 +525,34 @@ impl StreamComponent {
                 Poll::Ready(None) => return Poll::Ready(()),
             }
         }
+    }
+
+    /// Creates an writer for the stream
+    pub fn writer(&mut self) -> ComponentWriter {
+        ComponentWriter{
+            stream_id: self.stream_id,
+            component_id: self.component_id,
+            sink: self.sink.clone()
+        }
+    }
+}
+
+/// A write for the stream
+pub struct ComponentWriter {
+    stream_id: c_uint,
+    component_id: c_uint,
+    sink: mpsc::UnboundedSender<ControlMsg>
+}
+
+impl Write for ComponentWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.sink.unbounded_send(ControlMsg::Send((self.stream_id, self.component_id), Vec::from(buf)))
+            .map_err(|err| std::io::Error::new(ErrorKind::BrokenPipe, err))
+            .map(|_| buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
