@@ -556,6 +556,16 @@ impl Write for ComponentWriter {
     }
 }
 
+impl Clone for ComponentWriter {
+    fn clone(&self) -> Self {
+        ComponentWriter {
+            stream_id: self.stream_id,
+            component_id: self.component_id,
+            sink: self.sink.clone()
+        }
+    }
+}
+
 /// Future returned by [StreamComponent::wait_for_state]
 pub struct ComponentStateFuture {
     component: Option<StreamComponent>,
