@@ -397,6 +397,11 @@ impl Stream {
         StreamBuilder::new(agent, components)
     }
 
+    /// Returns the local nice stream id
+    pub fn stream_id(&self) -> c_uint {
+        self.id
+    }
+
     /// Returns the local STUN ufrag for this stream.
     pub fn get_local_ufrag(&self) -> &str {
         &self.local_ufrag
@@ -475,8 +480,17 @@ pub struct StreamComponent {
     sink: mpsc::UnboundedSender<ControlMsg>,
 }
 
-/* TODO: Implement a split method maybe which splits up this stream into a reader, a writer and a state future? */
 impl StreamComponent {
+    /// Returns the local nice stream id
+    pub fn stream_id(&self) -> c_uint {
+        self.stream_id
+    }
+
+    /// Returns the local nice component id
+    pub fn component_id(&self) -> c_uint {
+        self.component_id
+    }
+
     /// Adds a remote ICE candidate to this stream component.
     pub fn add_remote_candidate(&mut self, candidate: Candidate) {
         let msg = ControlMsg::AddRemoteCandidate((self.stream_id, self.component_id), candidate);
@@ -512,18 +526,18 @@ impl StreamComponent {
     }
 
     /// Updates the current state by polling [state_stream].
-    /// Returns `Poll::Ready(())` when [state_stream] has been closed.
-    pub fn poll_state(&mut self, cx: &mut Context) -> Poll<()> {
-        loop {
-            let state_stream = &mut self.state_stream;
-            pin_mut!(state_stream);
-            match state_stream.poll_next(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(new_state)) => {
-                    self.state = new_state;
-                }
-                Poll::Ready(None) => return Poll::Ready(()),
+    /// Returns `Poll::Ready(None)` when [state_stream] has been closed.
+    /// Otherwise it returns the old stream state.
+    pub fn poll_state(&mut self, cx: &mut Context) -> Poll<Option<ComponentState>> {
+        let state_stream = &mut self.state_stream;
+        pin_mut!(state_stream);
+        match state_stream.poll_next(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Some(new_state)) => {
+                let old_state = std::mem::replace(&mut self.state, new_state);
+                return Poll::Ready(Some(old_state));
             }
+            Poll::Ready(None) => return Poll::Ready(None),
         }
     }
 
@@ -542,6 +556,18 @@ pub struct ComponentWriter {
     stream_id: c_uint,
     component_id: c_uint,
     sink: mpsc::UnboundedSender<ControlMsg>
+}
+
+impl ComponentWriter {
+    /// Returns the local nice stream id
+    pub fn stream_id(&self) -> c_uint {
+        self.stream_id
+    }
+
+    /// Returns the local nice component id
+    pub fn component_id(&self) -> c_uint {
+        self.component_id
+    }
 }
 
 impl Write for ComponentWriter {
