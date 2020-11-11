@@ -614,7 +614,7 @@ impl Future for ComponentStateFuture {
         }
         let this = self.get_mut();
         let component = this.component.as_mut().expect("poll called after Ready");
-        if let Poll::Ready(()) = component.poll_state(cx) {
+        if let Poll::Ready(None) = component.poll_state(cx) {
             return Poll::Ready(None);
         }
         if rate(component.state) >= rate(this.target) {
@@ -633,7 +633,7 @@ impl FuturesStream for StreamComponent {
     type Item = Vec<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if let Poll::Ready(()) = self.deref_mut().poll_state(cx) {
+        if let Poll::Ready(None) = self.deref_mut().poll_state(cx) {
             return Poll::Ready(None);
         }
         let source = &mut self.source;
