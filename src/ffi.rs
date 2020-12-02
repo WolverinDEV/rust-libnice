@@ -514,7 +514,7 @@ impl NiceAgent {
             (StunPacingTimer, "stun-pacing-timer") "missing value",
             (StunReliableTimeout, "stun-reliable-timeout") "missing value",
             (StunServer, "stun-server"),
-            (StunPort, "stun-port") "missing value",
+            (StunPort, "stun-server-port") "missing value",
             (SupportRenomination, "support-renomination") "missing value",
             (Upnp, "upnp") "missing value",
             (UpnpTimeout, "upnp-timeout") "missing value"
@@ -540,7 +540,7 @@ impl NiceAgent {
             (StunPacingTimer, "stun-pacing-timer"),
             (StunReliableTimeout, "stun-reliable-timeout"),
             (StunServer, "stun-server"),
-            (StunPort, "stun-port"),
+            (StunPort, "stun-server-port"),
             (SupportRenomination, "support-renomination"),
             (Upnp, "upnp"),
             (UpnpTimeout, "upnp-timeout")
