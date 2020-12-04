@@ -176,8 +176,6 @@ impl Agent {
     /// Removes a stream from the nice agent.
     /// This steam must not be registered at this agent.
     fn remove_stream_internal(&mut self, stream_id: u32) {
-        println!("Removing stream {}", stream_id);
-
         /*
          * Just get all known components.
          * We drain them already since events could still be fired right now.
