@@ -665,6 +665,12 @@ impl NiceCandidate {
         from_nice_addr(&raw.addr)
     }
 
+    /// Returns the `base_addr` field.
+    pub fn base_addr(&self) -> SocketAddr {
+        let raw = unsafe { &*self.to_glib_none().0 };
+        from_nice_addr(&raw.base_addr)
+    }
+
     /// Sets the `addr` field.
     pub fn set_addr(&mut self, addr: impl Borrow<SocketAddr>) {
         let raw = unsafe { &mut *self.to_glib_none_mut().0 };
@@ -718,6 +724,7 @@ impl NiceCandidate {
     /// Converts this candidate into an [SdpAttributeCandidate].
     pub fn to_sdp(&self) -> SdpAttributeCandidate {
         let address = self.addr();
+        let base_addr = self.base_addr();
         SdpAttributeCandidate {
             foundation: self
                 .foundation()
@@ -738,8 +745,8 @@ impl NiceCandidate {
                 NiceCandidateType::PeerReflexive => SdpAttributeCandidateType::Prflx,
                 NiceCandidateType::Relayed => SdpAttributeCandidateType::Relay,
             },
-            raddr: None,
-            rport: None,
+            raddr: if base_addr.port() > 0 { Some(Address::Ip(base_addr.ip())) } else { None },
+            rport: if base_addr.port() > 0 { Some(base_addr.port() as u32) } else { None },
             tcp_type: match self.transport() {
                 NiceCandidateTransport::Udp => None,
                 NiceCandidateTransport::TcpActive => Some(SdpAttributeCandidateTcpType::Active),
