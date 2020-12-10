@@ -662,11 +662,11 @@ impl NiceCandidate {
     /// Returns the `addr` field.
     pub fn addr(&self) -> SocketAddr {
         let raw = unsafe { &*self.to_glib_none().0 };
-        from_nice_addr(&raw.addr)
+        from_nice_addr(&raw.addr).expect("failed to parse nice candidate addr")
     }
 
     /// Returns the `base_addr` field.
-    pub fn base_addr(&self) -> SocketAddr {
+    pub fn base_addr(&self) -> Option<SocketAddr> {
         let raw = unsafe { &*self.to_glib_none().0 };
         from_nice_addr(&raw.base_addr)
     }
@@ -745,8 +745,8 @@ impl NiceCandidate {
                 NiceCandidateType::PeerReflexive => SdpAttributeCandidateType::Prflx,
                 NiceCandidateType::Relayed => SdpAttributeCandidateType::Relay,
             },
-            raddr: if base_addr.port() > 0 { Some(Address::Ip(base_addr.ip())) } else { None },
-            rport: if base_addr.port() > 0 { Some(base_addr.port() as u32) } else { None },
+            raddr: base_addr.clone().map(|addr| Address::Ip(addr.ip().clone())),
+            rport: base_addr.map(|addr| u32::from(addr.port())),
             tcp_type: match self.transport() {
                 NiceCandidateTransport::Udp => None,
                 NiceCandidateTransport::TcpActive => Some(SdpAttributeCandidateTcpType::Active),
@@ -895,20 +895,18 @@ pub enum NiceCompatibility {
     OC2007R2 = sys::NiceCompatibility_NICE_COMPATIBILITY_OC2007R2 as isize,
 }
 
-fn from_nice_addr(raw: &sys::NiceAddress) -> SocketAddr {
+fn from_nice_addr(raw: &sys::NiceAddress) -> Option<SocketAddr> {
     unsafe {
         match i32::from(raw.s.addr.as_ref().sa_family) {
             platform::AF_INET => (
                 Ipv4Addr::from(u32::from_be(raw.s.ip4.as_ref().sin_addr.s_addr)),
                 u16::from_be(raw.s.ip4.as_ref().sin_port),
-            )
-                .into(),
+            ).into(),
             platform::AF_INET6 => (
                 Ipv6Addr::from(raw.s.ip6.as_ref().sin6_addr.s6_addr),
                 u16::from_be(raw.s.ip6.as_ref().sin6_port),
-            )
-                .into(),
-            other => panic!("unknown AF type: {}", other),
+            ).into(),
+            _ => None,
         }
     }
 }
