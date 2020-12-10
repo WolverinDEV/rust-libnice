@@ -898,14 +898,14 @@ pub enum NiceCompatibility {
 fn from_nice_addr(raw: &sys::NiceAddress) -> Option<SocketAddr> {
     unsafe {
         match i32::from(raw.s.addr.as_ref().sa_family) {
-            platform::AF_INET => (
+            platform::AF_INET => Some((
                 Ipv4Addr::from(u32::from_be(raw.s.ip4.as_ref().sin_addr.s_addr)),
                 u16::from_be(raw.s.ip4.as_ref().sin_port),
-            ).into(),
-            platform::AF_INET6 => (
+            ).into()),
+            platform::AF_INET6 => Some((
                 Ipv6Addr::from(raw.s.ip6.as_ref().sin6_addr.s6_addr),
                 u16::from_be(raw.s.ip6.as_ref().sin6_port),
-            ).into(),
+            ).into()),
             _ => None,
         }
     }
